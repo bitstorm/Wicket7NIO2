@@ -27,6 +27,7 @@ import java.io.OutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
+import java.nio.channels.CompletionHandler;
 import java.nio.file.OpenOption;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
@@ -39,6 +40,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 
 import org.apache.wicket.WicketRuntimeException;
 import org.apache.wicket.pageStore.IDataStore;
@@ -301,7 +303,7 @@ public class AsynchDiskDataStore implements IDataStore
 		private PageWindowManager manager;
 		private boolean unbound = false;
 
-		private final transient ConcurrentHashMap<Integer, FutureChannelWrapper> futureFiles = new ConcurrentHashMap<Integer, FutureChannelWrapper>();
+		private final transient ConcurrentHashMap<Integer, Semaphore> semaphoreFiles = new ConcurrentHashMap<Integer, Semaphore>();
 
 		protected SessionEntry(AsynchDiskDataStore diskDataStore, String sessionId)
 		{
@@ -353,15 +355,13 @@ public class AsynchDiskDataStore implements IDataStore
 				// allocate window for page
 				PageWindow window = getManager().createPageWindow(pageId, data.length);
 
-				AsynchronousFileChannel channel = getFileChannel(true);
+				final AsynchronousFileChannel channel = getFileChannel(true);
 				if (channel != null)
 				{
+					Semaphore semaphore = new Semaphore(0);
 
-					Future<Integer> futureFile = channel.write(ByteBuffer.wrap(data),
-						window.getFilePartOffset());
-					FutureChannelWrapper futureChannelWriting = new FutureChannelWrapper(channel,
-						futureFile);
-					futureFiles.put(pageId, futureChannelWriting);
+					channel.write(ByteBuffer.wrap(data), window.getFilePartOffset(), semaphore, new ChannelCompletionHandler(channel));
+					semaphoreFiles.put(pageId, semaphore);
 				}
 				else
 				{
@@ -429,25 +429,19 @@ public class AsynchDiskDataStore implements IDataStore
 
 		private void checkFileReady(int pageId)
 		{
-			FutureChannelWrapper futureFile = futureFiles.get(pageId);
-
+			Semaphore semaphoreFile = semaphoreFiles.get(pageId);
+			
+			if(semaphoreFile == null) return;
+			
 			try
 			{
-				futureFile.get();
-				futureFile.getChannel().close();
+				semaphoreFile.acquire();
+				semaphoreFiles.remove(pageId);
 			}
 			catch (InterruptedException e)
 			{
 				throw new RuntimeException(e);
-			}
-			catch (ExecutionException e)
-			{
-				throw new RuntimeException(e);
-			}
-			catch (IOException e)
-			{
-				throw new RuntimeException(e);
-			}
+			}			
 		}
 
 		private AsynchronousFileChannel getFileChannel(boolean create)
