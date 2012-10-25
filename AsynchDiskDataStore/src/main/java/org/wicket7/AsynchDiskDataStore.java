@@ -28,9 +28,19 @@ import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.CompletionHandler;
+import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitResult;
+import java.nio.file.FileVisitor;
+import java.nio.file.Files;
 import java.nio.file.OpenOption;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -46,7 +56,6 @@ import org.apache.wicket.WicketRuntimeException;
 import org.apache.wicket.pageStore.IDataStore;
 import org.apache.wicket.pageStore.PageWindowManager;
 import org.apache.wicket.pageStore.PageWindowManager.PageWindow;
-import org.apache.wicket.util.file.Files;
 import org.apache.wicket.util.io.IOUtils;
 import org.apache.wicket.util.lang.Args;
 import org.apache.wicket.util.lang.Bytes;
@@ -215,9 +224,11 @@ public class AsynchDiskDataStore implements IDataStore
 	@SuppressWarnings("unchecked")
 	private void loadIndex()
 	{
-		File storeFolder = getStoreFolder();
-		File index = new File(storeFolder, INDEX_FILE_NAME);
-		if (index.exists() && index.length() > 0)
+		Path storeFolder = getStoreFolder();
+		Path indexPath = storeFolder.resolve(INDEX_FILE_NAME);		
+		File index = indexPath.toFile();
+		
+		if (Files.exists(indexPath) && index.length() > 0)
 		{
 			try
 			{
@@ -244,10 +255,39 @@ public class AsynchDiskDataStore implements IDataStore
 			}
 			catch (Exception e)
 			{
-				log.error("Couldn't load DiskDataStore index from file " + index + ".", e);
+				log.error("Couldn't load DiskDataStore index from file " + indexPath + ".", e);
 			}
 		}
-		Files.remove(index);
+		try {			
+			Files.deleteIfExists(indexPath);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static boolean isEmpty(Path path) {
+		DirectoryStream<Path> dirStream = null;
+		boolean isEmpty = true;
+		
+		try {
+			dirStream = Files.newDirectoryStream(path);
+		
+			Iterator<Path> dirIterator = dirStream.iterator();
+			isEmpty = !dirIterator.hasNext();
+			dirStream.close();
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+		
+		return isEmpty;
+	}
+	
+	public static void deleteFolder(Path path){
+		File dirFile = path.toFile();
+		if(!dirFile.isDirectory())
+			return;
+		
+		org.apache.wicket.util.file.Files.removeFolder(dirFile);
 	}
 
 	/**
@@ -255,14 +295,14 @@ public class AsynchDiskDataStore implements IDataStore
 	 */
 	private void saveIndex()
 	{
-		File storeFolder = getStoreFolder();
-		if (storeFolder.exists())
+		Path storeFolder = getStoreFolder();
+		if (Files.exists(storeFolder))
 		{
-			File index = new File(storeFolder, INDEX_FILE_NAME);
-			Files.remove(index);
+			Path index = storeFolder.resolve(INDEX_FILE_NAME);
 			try
 			{
-				OutputStream stream = new FileOutputStream(index);
+				Files.deleteIfExists(index);
+				OutputStream stream = new FileOutputStream(index.toFile());
 				ObjectOutputStream oos = new ObjectOutputStream(stream);
 				try
 				{
@@ -299,7 +339,7 @@ public class AsynchDiskDataStore implements IDataStore
 
 		private final String sessionId;
 		private transient AsynchDiskDataStore diskDataStore;
-		private String fileName;
+		private Path fileName;
 		private PageWindowManager manager;
 		private boolean unbound = false;
 
@@ -320,7 +360,7 @@ public class AsynchDiskDataStore implements IDataStore
 			return manager;
 		}
 
-		private String getFileName()
+		private Path getFileName()
 		{
 			if (fileName == null)
 			{
@@ -447,13 +487,13 @@ public class AsynchDiskDataStore implements IDataStore
 		private AsynchronousFileChannel getFileChannel(boolean create)
 		{
 			AsynchronousFileChannel channel = null;
-			File file = new File(getFileName());
-			if (create || file.exists())
+			Path file = getFileName();
+			if (create || java.nio.file.Files.exists(file))
 			{
-				// /String mode = create ? "rw" : "r";
+				
 				try
 				{
-					Set<OpenOption> options = new TreeSet<OpenOption>();
+					List<OpenOption> options = new ArrayList<OpenOption>();
 					options.add(StandardOpenOption.READ);
 
 					if (create)
@@ -461,9 +501,7 @@ public class AsynchDiskDataStore implements IDataStore
 						options.add(StandardOpenOption.WRITE);
 						options.add(StandardOpenOption.CREATE);
 					}
-					// RandomAccessFile randomAccessFile = new RandomAccessFile(file, mode);
-					channel = AsynchronousFileChannel.open(file.toPath(), options,
-						Executors.newCachedThreadPool());
+					channel = AsynchronousFileChannel.open(file, options.toArray(new OpenOption[]{}));
 
 				}
 				catch (IOException e)
@@ -500,10 +538,10 @@ public class AsynchDiskDataStore implements IDataStore
 		 */
 		public synchronized void unbind()
 		{
-			File sessionFolder = diskDataStore.getSessionFolder(sessionId, false);
-			if (sessionFolder.exists())
+			Path sessionFolder = diskDataStore.getSessionFolder(sessionId, false);
+			if (Files.exists(sessionFolder))
 			{
-				Files.removeFolder(sessionFolder);
+				deleteFolder(sessionFolder);
 				cleanup(sessionFolder);
 			}
 			unbound = true;
@@ -516,20 +554,23 @@ public class AsynchDiskDataStore implements IDataStore
 		 * @param sessionFolder
 		 *            must not be null
 		 */
-		private void cleanup(final File sessionFolder)
+		private void cleanup(final Path sessionFolder)
 		{
-			File high = sessionFolder.getParentFile();
-			if (high.list().length == 0)
-			{
-				if (Files.removeFolder(high))
+			Path high = sessionFolder.getParent();
+			try{
+				
+				if (isEmpty(high))
 				{
-					File low = high.getParentFile();
-					if (low.list().length == 0)
-					{
-						Files.removeFolder(low);
-					}
+					Files.delete(high);
+					Path low = high.getParent();
+					
+					if (isEmpty(low))
+						Files.delete(low);					
 				}
-			}
+								
+			}catch(IOException e){
+				e.printStackTrace();
+			}						
 		}
 	}
 
@@ -541,10 +582,10 @@ public class AsynchDiskDataStore implements IDataStore
 	 * @param createSessionFolder
 	 * @return file name for pagemap
 	 */
-	private String getSessionFileName(String sessionId, boolean createSessionFolder)
+	private Path getSessionFileName(String sessionId, boolean createSessionFolder)
 	{
-		File sessionFolder = getSessionFolder(sessionId, createSessionFolder);
-		return new File(sessionFolder, "data").getAbsolutePath();
+		Path sessionFolder = getSessionFolder(sessionId, createSessionFolder);
+		return sessionFolder.resolve("data");
 	}
 
 	/**
@@ -552,9 +593,11 @@ public class AsynchDiskDataStore implements IDataStore
 	 * 
 	 * @return the folder where the pages are stored
 	 */
-	protected File getStoreFolder()
+	protected Path getStoreFolder()
 	{
-		return new File(fileStoreFolder, applicationName + "-filestore");
+		Path storeFolderPath = null;
+		storeFolderPath = Paths.get(fileStoreFolder.getAbsolutePath(), applicationName + "-filestore");
+		return storeFolderPath;
 	}
 
 	/**
@@ -565,9 +608,9 @@ public class AsynchDiskDataStore implements IDataStore
 	 * @param create
 	 * @return folder used to store session data
 	 */
-	protected File getSessionFolder(String sessionId, final boolean create)
+	protected Path getSessionFolder(String sessionId, final boolean create)
 	{
-		File storeFolder = getStoreFolder();
+		Path storeFolder = getStoreFolder();
 
 		sessionId = sessionId.replace('*', '_');
 		sessionId = sessionId.replace('/', '_');
@@ -575,10 +618,14 @@ public class AsynchDiskDataStore implements IDataStore
 
 		sessionId = createPathFrom(sessionId);
 
-		File sessionFolder = new File(storeFolder, sessionId);
-		if (create && sessionFolder.exists() == false)
+		Path sessionFolder = storeFolder.resolve(sessionId);
+		if (create && !java.nio.file.Files.exists(sessionFolder))
 		{
-			Files.mkdirs(sessionFolder);
+			try {
+				java.nio.file.Files.createDirectories(sessionFolder);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
 		}
 		return sessionFolder;
 	}

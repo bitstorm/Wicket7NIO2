@@ -224,15 +224,6 @@ public class DiskDataStoreTest extends Assert
 					saveCount.incrementAndGet();
 					bytesWritten.addAndGet(data.length);
 				}
-
-				try
-				{
-					Thread.sleep(random.nextInt(SLEEP_MAX));
-				}
-				catch (InterruptedException e)
-				{
-					log.error(e.getMessage(), e);
-				}
 			}
 
 			saveDone.set(true);
@@ -260,15 +251,6 @@ public class DiskDataStoreTest extends Assert
 					read1Count.incrementAndGet();
 					bytesRead.addAndGet(bytes.length);
 				}
-
-				try
-				{
-					Thread.sleep(random.nextInt(SLEEP_MAX));
-				}
-				catch (InterruptedException e)
-				{
-					log.error(e.getMessage(), e);
-				}
 			}
 
 			read1Done.set(true);
@@ -293,16 +275,7 @@ public class DiskDataStoreTest extends Assert
 					}
 					read2Count.incrementAndGet();
 					bytesRead.addAndGet(bytes.length);
-				}
-
-				try
-				{
-					Thread.sleep(random.nextInt(SLEEP_MAX));
-				}
-				catch (InterruptedException e)
-				{
-					log.error(e.getMessage(), e);
-				}
+				}				
 			}
 
 			read2Done.set(true);
@@ -329,7 +302,7 @@ public class DiskDataStoreTest extends Assert
 			new Thread(new SaveRunnable()).start();
 		}
 
-		while (!(read1Done.get() && read2Done.get() && saveDone.get()))
+		while (!read2Done.get())
 		{
 			try
 			{
@@ -396,7 +369,7 @@ public class DiskDataStoreTest extends Assert
 			MAX_SIZE_PER_SESSION);
 
 		String sessionId = "abcdefg";
-		java.io.File sessionFolder = store.getSessionFolder(sessionId, true);
+		java.io.File sessionFolder = store.getSessionFolder(sessionId, true).toFile();
 		String absolutePath = sessionFolder.getAbsolutePath();
 		assertTrue(absolutePath.contains("sessionFolderName-filestore"));
 		assertTrue(absolutePath.contains("7141"));
